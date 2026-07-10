@@ -1,7 +1,12 @@
-import Anthropic from '@anthropic-ai/sdk'
 import type { SceneGraph } from '@pascal-app/core/clone-scene-graph'
 import type { AnyNode } from '@pascal-app/core/schema'
 import { TEMPLATES } from '@pascal-app/mcp/templates'
+import {
+  completeVision,
+  providerLabel,
+  type RenovateProvider,
+  resolveProvider,
+} from './renovate-llm'
 
 type MutableNodes = Record<string, AnyNode>
 interface MutableGraph {
@@ -46,6 +51,7 @@ export interface RenovationResult {
   changes: RenovationChange[]
   summary: string
   mode: 'demo' | 'live'
+  provider?: RenovateProvider
   analysis?: string
 }
 
@@ -141,20 +147,6 @@ function buildDemoSummary(changes: RenovationChange[]): string {
     `Net effect: a ${area} m² Master Suite replaces the separate Bedroom 1 + Bath.`,
     ' Open-plan feel preserved in the living wing. No structural perimeter changes.',
   ].join('')
-}
-
-function hasApiKey(): boolean {
-  const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process
-    ?.env
-  return Boolean(env?.ANTHROPIC_API_KEY)
-}
-
-function getClient(): Anthropic {
-  const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process
-    ?.env
-  const key = env?.ANTHROPIC_API_KEY
-  if (!key) throw new Error('ANTHROPIC_API_KEY not set')
-  return new Anthropic({ apiKey: key })
 }
 
 interface FloorplanAnalysis {
@@ -276,26 +268,15 @@ Respond with ONLY a JSON object:
 }
 Do NOT invent precise dimensions. Keep changes minimal and aligned with the stated goals and photo evidence.`
 
-async function analyzeFloorplanLive(image: string): Promise<FloorplanAnalysis> {
-  const client = getClient()
-  const mediaPart = image.startsWith('data:')
-    ? {
-        type: 'image' as const,
-        source: { type: 'base64' as const, media_type: mediaTypeFromDataUrl(image), data: dataUrlPayload(image) },
-      }
-    : { type: 'text' as const, text: `URL: ${image}` }
-
-  const response = await client.messages.create({
-    model: env('CLAUDE_MODEL') ?? 'claude-sonnet-4-5',
-    max_tokens: 2048,
-    messages: [
-      { role: 'user', content: [mediaPart, { type: 'text', text: FLOORPLAN_PROMPT }] },
-    ],
+async function analyzeFloorplanLive(
+  provider: RenovateProvider,
+  image: string,
+): Promise<FloorplanAnalysis> {
+  const text = await completeVision(provider, {
+    prompt: FLOORPLAN_PROMPT,
+    images: image.startsWith('data:') ? [{ dataUrl: image }] : [],
+    maxTokens: 2048,
   })
-  const text = response.content
-    .filter((b) => b.type === 'text')
-    .map((b) => (b.type === 'text' ? b.text : ''))
-    .join('')
   const parsed = extractJson(text) as FloorplanAnalysis
   if (!parsed.walls) throw new Error('floorplan analysis returned no walls')
   return parsed
@@ -306,109 +287,61 @@ interface LiveRenovationPlan {
   summary: string
 }
 
-async function analyzeSpacePhotoLive(image: string): Promise<SpacePhotoAnalysis> {
-  const client = getClient()
-  const mediaPart = image.startsWith('data:')
-    ? {
-        type: 'image' as const,
-        source: {
-          type: 'base64' as const,
-          media_type: mediaTypeFromDataUrl(image),
-          data: dataUrlPayload(image),
-        },
-      }
-    : { type: 'text' as const, text: `URL: ${image}` }
-
-  const response = await client.messages.create({
-    model: env('CLAUDE_MODEL') ?? 'claude-sonnet-4-5',
-    max_tokens: 1536,
-    messages: [{ role: 'user', content: [mediaPart, { type: 'text', text: SPACE_PHOTO_PROMPT }] }],
+async function analyzeSpacePhotoLive(
+  provider: RenovateProvider,
+  image: string,
+): Promise<SpacePhotoAnalysis> {
+  const text = await completeVision(provider, {
+    prompt: SPACE_PHOTO_PROMPT,
+    images: image.startsWith('data:') ? [{ dataUrl: image }] : [],
+    maxTokens: 1536,
   })
-  const text = response.content
-    .filter((b) => b.type === 'text')
-    .map((b) => (b.type === 'text' ? b.text : ''))
-    .join('')
   return extractJson(text) as SpacePhotoAnalysis
 }
 
-async function proposeRenovationLive(args: {
-  context: RenovationContext
-  reference: string[]
-  spacePhotos: string[]
-  goals: string
-}): Promise<LiveRenovationPlan> {
-  const client = getClient()
-  const content: Anthropic.ContentBlockParam[] = [
-    {
-      type: 'text',
-      text: [
-        RENOVATION_PROMPT,
-        '',
-        '## Goals',
-        args.goals,
-        '',
-        '## Floorplan analysis',
-        '```json',
-        JSON.stringify(args.context.floorplan, null, 2),
-        '```',
-        '',
-        '## Space photo analysis',
-        '```json',
-        JSON.stringify(args.context.spacePhotos, null, 2),
-        '```',
-      ].join('\n'),
-    },
-  ]
+async function proposeRenovationLive(
+  provider: RenovateProvider,
+  args: {
+    context: RenovationContext
+    reference: string[]
+    spacePhotos: string[]
+    goals: string
+  },
+): Promise<LiveRenovationPlan> {
+  const prompt = [
+    RENOVATION_PROMPT,
+    '',
+    '## Goals',
+    args.goals,
+    '',
+    '## Floorplan analysis',
+    '```json',
+    JSON.stringify(args.context.floorplan, null, 2),
+    '```',
+    '',
+    '## Space photo analysis',
+    '```json',
+    JSON.stringify(args.context.spacePhotos, null, 2),
+    '```',
+  ].join('\n')
 
-  for (const photo of [...args.spacePhotos, ...args.reference]) {
-    if (photo.startsWith('data:')) {
-      content.push({
-        type: 'image',
-        source: {
-          type: 'base64',
-          media_type: mediaTypeFromDataUrl(photo),
-          data: dataUrlPayload(photo),
-        },
-      })
-    }
-  }
-  const response = await client.messages.create({
-    model: env('CLAUDE_MODEL') ?? 'claude-sonnet-4-5',
-    max_tokens: 2048,
-    messages: [{ role: 'user', content }],
+  const images = [...args.spacePhotos, ...args.reference]
+    .filter((photo) => photo.startsWith('data:'))
+    .map((dataUrl) => ({ dataUrl }))
+
+  const text = await completeVision(provider, {
+    prompt,
+    images,
+    maxTokens: 2048,
   })
-  const text = response.content
-    .filter((b) => b.type === 'text')
-    .map((b) => (b.type === 'text' ? b.text : ''))
-    .join('')
   const parsed = extractJson(text) as LiveRenovationPlan
   if (!parsed.changes) throw new Error('renovation plan returned no changes')
   return parsed
 }
 
-function env(key: string): string | undefined {
-  return (
-    (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.[key]
-  )
-}
-
-function mediaTypeFromDataUrl(url: string): 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif' {
-  const m = /^data:([^;,]+)?/.exec(url)
-  const mt = m?.[1] ?? 'image/jpeg'
-  if (mt === 'image/png') return 'image/png'
-  if (mt === 'image/webp') return 'image/webp'
-  if (mt === 'image/gif') return 'image/gif'
-  return 'image/jpeg'
-}
-
-function dataUrlPayload(url: string): string {
-  const m = /^data:[^;,]*(?:;base64)?,(.*)$/.exec(url)
-  return m?.[1] ?? ''
-}
-
 function extractJson(text: string): unknown {
   const fence = /```(?:json)?\s*([\s\S]*?)```/.exec(text)
-  const raw = (fence && fence[1] ? fence[1] : text).trim()
+  const raw = (fence?.[1] ? fence[1] : text).trim()
   return JSON.parse(raw)
 }
 
@@ -446,8 +379,10 @@ export async function runRenovation(input: RenovationInput): Promise<RenovationR
     Boolean(normalized.floorplan) ||
     normalized.spacePhotos.length > 0 ||
     normalized.reference.length > 0
+  const hasGoals = normalized.goals.trim().length > 0
+  const provider = resolveProvider()
 
-  if (!hasApiKey() || !hasImages) {
+  if (!provider || (!hasImages && !hasGoals)) {
     const before = buildDemoBefore()
     const { after, changes } = buildDemoAfter()
     return {
@@ -457,18 +392,18 @@ export async function runRenovation(input: RenovationInput): Promise<RenovationR
       summary: buildDemoSummary(changes),
       mode: 'demo',
       analysis:
-        'Demo mode (no ANTHROPIC_API_KEY or no photos). Showing a sample renovation on the built-in two-bedroom template: merge Bedroom 1 + Bath into a Master Suite.',
+        'Demo mode (no AI provider key, and no photos or goals). Showing a sample renovation on the built-in two-bedroom template: merge Bedroom 1 + Bath into a Master Suite.',
     }
   }
 
   let floorplanAnalysis: FloorplanAnalysis = { walls: [], rooms: [] }
   if (normalized.floorplan) {
-    floorplanAnalysis = await analyzeFloorplanLive(normalized.floorplan)
+    floorplanAnalysis = await analyzeFloorplanLive(provider, normalized.floorplan)
   }
 
   const spacePhotoAnalysis: SpacePhotoAnalysis[] = []
   for (const photo of normalized.spacePhotos.slice(0, 6)) {
-    spacePhotoAnalysis.push(await analyzeSpacePhotoLive(photo))
+    spacePhotoAnalysis.push(await analyzeSpacePhotoLive(provider, photo))
   }
 
   let before: MutableGraph
@@ -478,7 +413,7 @@ export async function runRenovation(input: RenovationInput): Promise<RenovationR
     before = buildDemoBefore()
   }
 
-  const plan = await proposeRenovationLive({
+  const plan = await proposeRenovationLive(provider, {
     context: { floorplan: floorplanAnalysis, spacePhotos: spacePhotoAnalysis },
     reference: normalized.reference,
     spacePhotos: normalized.spacePhotos,
@@ -499,6 +434,9 @@ export async function runRenovation(input: RenovationInput): Promise<RenovationR
   if (normalized.reference.length > 0) {
     parts.push(`${normalized.reference.length} reference photo(s)`)
   }
+  if (!hasImages && hasGoals) {
+    parts.push('goals prompt only (sample flat as base)')
+  }
 
   return {
     before: toSceneGraph(before),
@@ -506,10 +444,11 @@ export async function runRenovation(input: RenovationInput): Promise<RenovationR
     changes,
     summary: plan.summary,
     mode: 'live',
+    provider,
     analysis:
       parts.length > 0
-        ? `Analyzed ${parts.join(', ')}.`
-        : 'Analyzed your photos and goals to propose a renovation plan.',
+        ? `Analyzed with ${providerLabel(provider)}: ${parts.join(', ')}.`
+        : `Analyzed with ${providerLabel(provider)} to propose a renovation plan.`,
   }
 }
 

@@ -5,15 +5,15 @@ import { cva, type VariantProps } from 'class-variance-authority';
 
 export const textareaVariants = cva(
   [
-    'w-full px-3.5 py-3.5 text-foreground placeholder:text-dimmed transition-[border-color,box-shadow] shadow-input rounded',
-    'ring ring-input-border hover:not-[[disabled],[data-disabled]]:not-[:focus]:ring-input-accent-border focus:outline-0 focus:ring-primary focus:ring-2 min-h-24',
+    'w-full resize-none px-3.5 py-3 text-foreground placeholder:text-dimmed transition-[box-shadow,background-color] duration-150 ease-out rounded-xl',
+    'ring ring-input-border hover:not-[[disabled],[data-disabled]]:not-[:focus]:ring-input-accent-border focus:outline-0 focus:ring-primary focus:ring-2 min-h-28',
     'disabled:opacity-70 disabled:cursor-not-allowed',
   ],
   {
     variants: {
       variant: {
         default: 'bg-input',
-        subtle: 'bg-input/60',
+        subtle: 'bg-accent/70',
       },
     },
     defaultVariants: {

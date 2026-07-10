@@ -1,17 +1,18 @@
 'use client'
 
+import { Icon } from '@iconify/react'
 import { Editor, type SceneGraph } from '@pascal-app/editor'
-import { ArrowLeft, Sparkles, Wand2, X } from 'lucide-react'
 import { useCallback, useState } from 'react'
-import type { RenovationChange, RenovationResult } from '@/lib/renovate-agent'
+import { EDITOR_SIDEBAR_TABS } from '@/components/editor-sidebar-tabs'
+import type { ChangeKind, RenovationChange, RenovationResult } from '@/lib/renovate-agent'
 
-const CHANGE_ICONS: Record<string, string> = {
-  'remove-wall': '🧱',
-  'add-wall': '🏗️',
-  'move-item': '🪑',
-  'relabel-zone': '🏷️',
-  'add-opening': '🚪',
-  restyle: '🎨',
+const CHANGE_ICONS: Record<ChangeKind, string> = {
+  'remove-wall': 'tabler:wall-off',
+  'add-wall': 'tabler:wall',
+  'move-item': 'tabler:arrows-move',
+  'relabel-zone': 'tabler:tag',
+  'add-opening': 'tabler:door',
+  restyle: 'tabler:palette',
 }
 
 interface Props {
@@ -39,8 +40,10 @@ export function ResultViewer({ result, onReset }: Props) {
                 : 'bg-amber-500/15 text-amber-600'
             }`}
           >
-            <Sparkles className="h-3 w-3" />
-            {result.mode === 'live' ? 'Live (Claude)' : 'Demo'}
+            <Icon className="size-3 text-primary" icon="tabler:sparkles" />
+            {result.mode === 'live'
+              ? `Live (${result.provider === 'openai' ? 'OpenAI' : result.provider === 'google' ? 'Gemini' : 'Claude'})`
+              : 'Demo'}
           </span>
           <div className="flex items-center rounded-full border border-border/60 bg-muted/40 p-0.5">
             <button
@@ -67,7 +70,7 @@ export function ResultViewer({ result, onReset }: Props) {
             onClick={onReset}
             type="button"
           >
-            <ArrowLeft className="h-3 w-3" />
+            <Icon className="size-3" icon="tabler:arrow-left" />
             New
           </button>
         </div>
@@ -76,7 +79,7 @@ export function ResultViewer({ result, onReset }: Props) {
       <aside className="absolute top-0 right-0 z-30 flex h-full w-full max-w-sm flex-col border-l border-border/60 bg-background/95 shadow-xl backdrop-blur">
         <div className="border-b border-border/60 px-5 py-4">
           <div className="flex items-center gap-2">
-            <Wand2 className="h-4 w-4 text-primary" />
+            <Icon className="size-4 text-primary" icon="tabler:wand" />
             <h2 className="font-semibold text-sm">Renovation Proposal</h2>
           </div>
           <p className="mt-2 text-muted-foreground text-xs leading-relaxed">{result.summary}</p>
@@ -130,7 +133,12 @@ export function ResultViewer({ result, onReset }: Props) {
       </aside>
 
       <div className="h-full w-full pr-[24rem]">
-        <Editor layoutVersion="v2" projectId="reno-preview" onLoad={handleLoad} />
+        <Editor
+          layoutVersion="v2"
+          onLoad={handleLoad}
+          projectId="reno-preview"
+          sidebarTabs={EDITOR_SIDEBAR_TABS}
+        />
       </div>
     </div>
   )
@@ -147,7 +155,7 @@ function ChangeCard({
   onDismiss: () => void
   onRestore: () => void
 }) {
-  const icon = CHANGE_ICONS[change.kind] ?? '•'
+  const icon = CHANGE_ICONS[change.kind] ?? 'tabler:point'
   return (
     <div
       className={`group rounded-lg border p-3 transition ${
@@ -156,8 +164,10 @@ function ChangeCard({
           : 'border-border/60 bg-background hover:border-primary/40'
       }`}
     >
-      <div className="flex items-start gap-2">
-        <span className="text-base leading-none">{icon}</span>
+      <div className="flex items-start gap-2.5">
+        <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+          <Icon className="size-3.5" icon={icon} />
+        </span>
         <div className="min-w-0 flex-1">
           <p className="truncate font-medium text-xs">{change.title}</p>
           <p className="mt-0.5 text-muted-foreground text-[11px] leading-relaxed">
@@ -165,12 +175,12 @@ function ChangeCard({
           </p>
         </div>
         <button
+          aria-label={dismissed ? 'Restore' : 'Dismiss'}
           className="shrink-0 text-muted-foreground opacity-0 transition hover:text-foreground group-hover:opacity-100"
           onClick={dismissed ? onRestore : onDismiss}
           type="button"
-          aria-label={dismissed ? 'Restore' : 'Dismiss'}
         >
-          {dismissed ? <Sparkles className="h-3 w-3" /> : <X className="h-3 w-3" />}
+          <Icon className="size-3.5" icon={dismissed ? 'tabler:refresh' : 'tabler:x'} />
         </button>
       </div>
     </div>

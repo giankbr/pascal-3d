@@ -11,7 +11,7 @@ Upload a floor plan, interior shots, exterior photos, or inspiration. Describe w
 - Mix any photos: floor plan, interior, exterior, reference
 - Tag each photo after upload
 - Describe goals in plain language (with style presets)
-- AI-assisted renovation plan (Claude) with demo fallback when no API key
+- AI-assisted renovation plan (Claude, OpenAI, or Gemini) with demo fallback when no API key
 - Before/after 3D review in the viewer
 - Light and dark mode
 - UI built with [Selia](https://selia.earth/) and [Tabler Icons](https://tabler.io/icons)
@@ -34,10 +34,14 @@ Optional. Copy `.env.example` to `.env.local` in the monorepo root (or `apps/edi
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `ANTHROPIC_API_KEY` | No | Enables live photo analysis. Without it, Renovate runs in demo mode. |
-| `CLAUDE_MODEL` | No | Model override (default: `claude-sonnet-4-5`) |
+| `RENOVATE_PROVIDER` | No | Force provider: `anthropic`, `openai`, or `google`. Auto-detects from keys if unset. |
+| `ANTHROPIC_API_KEY` | No | Claude vision. Default model: `claude-sonnet-4-5` (`CLAUDE_MODEL`) |
+| `OPENAI_API_KEY` | No | OpenAI vision. Default model: `gpt-4o` (`OPENAI_MODEL`) |
+| `GOOGLE_GENERATIVE_AI_API_KEY` | No | Gemini vision (`GEMINI_API_KEY` also works). Default: `gemini-2.0-flash` (`GEMINI_MODEL`) |
 | `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` | No | Address search in the editor |
 | `PORT` | No | Dev server port (app uses `3002` via the editor script) |
+
+Without any AI key, Renovate runs in demo mode.
 
 ## Scripts
 

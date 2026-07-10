@@ -233,10 +233,13 @@ export default function RenovatePage() {
                 </label>
               </div>
               <Textarea
+                className="min-h-32 leading-relaxed"
                 id="goals"
                 onChange={(e) => setGoals(e.target.value)}
                 placeholder="Open-plan living/kitchen, keep the footprint, neutral tones, more light…"
+                rows={4}
                 value={goals}
+                variant="subtle"
               />
               <div className="flex flex-wrap gap-1.5">
                 {STYLE_PRESETS.map((preset) => (
@@ -283,7 +286,7 @@ export default function RenovatePage() {
               <p className="text-center text-dimmed text-sm">
                 {busy
                   ? 'This can take a moment…'
-                  : 'Works with just goals, or with any mix of photos.'}
+                  : 'Prompt only works too. Add photos for a tighter plan.'}
               </p>
             </div>
           </CardBody>
