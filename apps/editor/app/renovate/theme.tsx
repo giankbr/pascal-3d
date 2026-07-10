@@ -97,13 +97,14 @@ export function ThemeToggle() {
 
   return (
     <Button
-      aria-label="Toggle color mode"
+      aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+      className="shrink-0"
       onClick={toggleTheme}
-      size="icon"
+      size="sm-icon"
       type="button"
       variant="outline"
     >
-      <Icon className="size-4.5" icon={isDark ? 'tabler:sun' : 'tabler:moon'} />
+      <Icon className="size-4" icon={isDark ? 'tabler:sun' : 'tabler:moon'} />
     </Button>
   )
 }

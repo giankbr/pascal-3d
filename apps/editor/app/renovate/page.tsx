@@ -146,7 +146,7 @@ export default function RenovatePage() {
             <Icon className="size-5 text-primary" icon="tabler:wand" />
             <span className="font-semibold tracking-tight">Renovate</span>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
             <ThemeToggle />
             <Button nativeButton={false} render={<Link href="/" />} size="sm" variant="outline">
               Editor
