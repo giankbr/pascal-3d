@@ -1,0 +1,12 @@
+{
+  "$schema": "https://selia.earth/schema.json",
+  "framework": "next",
+  "paths": {
+    "components": "components/selia",
+    "utils": "lib/utils.ts"
+  },
+  "imports": {
+    "components": "@/components/selia",
+    "utils": "@/lib/utils"
+  }
+}
