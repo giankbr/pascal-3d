@@ -13,8 +13,11 @@ import {
   getNode,
   type LiveRenovationPlan,
   type MutableGraph,
+  type PlanChangeTarget,
   removeNodeCascade,
 } from './renovate-scene'
+
+export type { PlanChangeTarget }
 
 export type PhotoKind = 'floorplan' | 'interior' | 'exterior' | 'reference' | 'other'
 
@@ -44,6 +47,7 @@ export interface RenovationChange {
   kind: ChangeKind
   title: string
   description: string
+  target?: PlanChangeTarget
 }
 
 export interface RenovationResult {

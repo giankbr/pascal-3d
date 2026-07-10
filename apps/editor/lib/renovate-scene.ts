@@ -10,19 +10,6 @@ export type SceneChangeKind =
   | 'add-opening'
   | 'restyle'
 
-export interface SceneRenovationChange {
-  id: string
-  kind: SceneChangeKind
-  title: string
-  description: string
-}
-
-export interface MutableGraph {
-  nodes: MutableNodes
-  rootNodeIds: string[]
-  collections?: Record<string, unknown>
-}
-
 export interface PlanChangeTarget {
   wallId?: string
   itemId?: string
@@ -32,6 +19,20 @@ export interface PlanChangeTarget {
   start?: [number, number]
   end?: [number, number]
   merge?: boolean
+}
+
+export interface SceneRenovationChange {
+  id: string
+  kind: SceneChangeKind
+  title: string
+  description: string
+  target?: PlanChangeTarget
+}
+
+export interface MutableGraph {
+  nodes: MutableNodes
+  rootNodeIds: string[]
+  collections?: Record<string, unknown>
 }
 
 export interface PlanChangeInput {
@@ -617,6 +618,7 @@ export function applyPlanToScene(
     kind: c.kind,
     title: c.title,
     description: c.description,
+    ...(c.target ? { target: c.target } : {}),
   }))
 
   const usedWallIds = new Set<string>()

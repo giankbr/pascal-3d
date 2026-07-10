@@ -2,9 +2,10 @@
 
 import { Icon } from '@iconify/react'
 import { Editor, type SceneGraph } from '@pascal-app/editor'
-import { useCallback, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { EDITOR_SIDEBAR_TABS } from '@/components/editor-sidebar-tabs'
 import type { ChangeKind, RenovationChange, RenovationResult } from '@/lib/renovate-agent'
+import { applyPlanToScene, type MutableGraph } from '@/lib/renovate-scene'
 
 const CHANGE_ICONS: Record<ChangeKind, string> = {
   'remove-wall': 'tabler:wall-off',
@@ -20,14 +21,70 @@ interface Props {
   onReset: () => void
 }
 
+function asMutableGraph(graph: SceneGraph): MutableGraph {
+  return graph as unknown as MutableGraph
+}
+
+function buildEffectiveAfter(
+  result: RenovationResult,
+  dismissedChanges: Set<string>,
+): SceneGraph {
+  const accepted = result.changes.filter((c) => !dismissedChanges.has(c.id))
+
+  if (accepted.length === 0) return result.before
+  if (accepted.length === result.changes.length) return result.after
+
+  const { after } = applyPlanToScene(asMutableGraph(result.before), {
+    summary: result.summary,
+    changes: accepted.map((c) => ({
+      kind: c.kind,
+      title: c.title,
+      description: c.description.replace(/\s*\(no matching scene target; left as proposal note\)$/, ''),
+      ...(c.target ? { target: c.target } : {}),
+    })),
+  })
+
+  return after as unknown as SceneGraph
+}
+
 export function ResultViewer({ result, onReset }: Props) {
   const [view, setView] = useState<'after' | 'before'>('after')
   const [dismissedChanges, setDismissedChanges] = useState<Set<string>>(new Set())
 
-  const graph: SceneGraph = view === 'after' ? result.after : result.before
+  const dismissedKey = useMemo(
+    () => [...dismissedChanges].sort().join(','),
+    [dismissedChanges],
+  )
+
+  const effectiveAfter = useMemo(
+    () => buildEffectiveAfter(result, dismissedChanges),
+    [result, dismissedChanges],
+  )
+
+  const graph: SceneGraph = view === 'after' ? effectiveAfter : result.before
   const visibleChanges = result.changes.filter((c) => !dismissedChanges.has(c.id))
+  const acceptedCount = visibleChanges.length
 
   const handleLoad = useCallback(async () => graph, [graph])
+
+  const dismissChange = useCallback((id: string) => {
+    setDismissedChanges((prev) => new Set(prev).add(id))
+    setView('after')
+  }, [])
+
+  const restoreChange = useCallback((id: string) => {
+    setDismissedChanges((prev) => {
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
+    setView('after')
+  }, [])
+
+  const restoreAll = useCallback(() => {
+    setDismissedChanges(new Set())
+    setView('after')
+  }, [])
 
   return (
     <div className="relative h-screen w-screen">
@@ -88,12 +145,17 @@ export function ResultViewer({ result, onReset }: Props) {
               {result.analysis}
             </p>
           )}
+          {dismissedChanges.size > 0 && (
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              Showing {acceptedCount} of {result.changes.length} changes in the 3D view.
+            </p>
+          )}
         </div>
 
         <div className="flex-1 overflow-y-auto px-5 py-4">
           <div className="mb-3 flex items-center justify-between">
             <h3 className="font-medium text-xs uppercase tracking-wide text-muted-foreground">
-              {visibleChanges.length} change{visibleChanges.length === 1 ? '' : 's'}
+              {acceptedCount} change{acceptedCount === 1 ? '' : 's'}
             </h3>
           </div>
           <ul className="space-y-2">
@@ -104,16 +166,8 @@ export function ResultViewer({ result, onReset }: Props) {
                   <ChangeCard
                     change={c}
                     dismissed={dismissed}
-                    onDismiss={() =>
-                      setDismissedChanges((prev) => new Set(prev).add(c.id))
-                    }
-                    onRestore={() =>
-                      setDismissedChanges((prev) => {
-                        const next = new Set(prev)
-                        next.delete(c.id)
-                        return next
-                      })
-                    }
+                    onDismiss={() => dismissChange(c.id)}
+                    onRestore={() => restoreChange(c.id)}
                   />
                 </li>
               )
@@ -123,8 +177,9 @@ export function ResultViewer({ result, onReset }: Props) {
 
         <div className="border-t border-border/60 px-5 py-3">
           <button
-            className="w-full rounded-md bg-primary px-4 py-2 font-medium text-primary-foreground text-sm transition hover:bg-primary/90"
-            onClick={() => setDismissedChanges(new Set())}
+            className="w-full rounded-md bg-primary px-4 py-2 font-medium text-primary-foreground text-sm transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={dismissedChanges.size === 0}
+            onClick={restoreAll}
             type="button"
           >
             Restore all ({result.changes.length})
@@ -134,6 +189,7 @@ export function ResultViewer({ result, onReset }: Props) {
 
       <div className="h-full w-full pr-[24rem]">
         <Editor
+          key={`reno-${view}-${dismissedKey}`}
           layoutVersion="v2"
           onLoad={handleLoad}
           projectId="reno-preview"
