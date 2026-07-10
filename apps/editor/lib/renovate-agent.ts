@@ -7,13 +7,14 @@ import {
   type RenovateProvider,
   resolveProvider,
 } from './renovate-llm'
-
-type MutableNodes = Record<string, AnyNode>
-interface MutableGraph {
-  nodes: MutableNodes
-  rootNodeIds: string[]
-  collections?: Record<string, unknown>
-}
+import {
+  applyPlanToScene,
+  cloneGraph,
+  getNode,
+  type LiveRenovationPlan,
+  type MutableGraph,
+  removeNodeCascade,
+} from './renovate-scene'
 
 export type PhotoKind = 'floorplan' | 'interior' | 'exterior' | 'reference' | 'other'
 
@@ -58,86 +59,61 @@ export interface RenovationResult {
 const WALL_HEIGHT = 2.5
 const WALL_THICKNESS = 0.1
 
-function cloneGraph(graph: SceneGraph | MutableGraph): MutableGraph {
-  return JSON.parse(JSON.stringify(graph))
-}
-
 function toSceneGraph(graph: MutableGraph): SceneGraph {
   return graph as unknown as SceneGraph
 }
 
-function getNode(graph: MutableGraph, id: string): AnyNode | undefined {
-  return graph.nodes[id]
-}
-
-function removeNode(graph: MutableGraph, id: string): void {
-  const n = graph.nodes[id]
-  if (!n) return
-  const parent = n.parentId ? graph.nodes[n.parentId] : undefined
-  if (parent && 'children' in parent && Array.isArray(parent.children)) {
-    parent.children = (parent.children as string[]).filter((c) => c !== id)
-  }
-  delete graph.nodes[id]
-}
-
 function buildDemoBefore(): MutableGraph {
-  return cloneGraph(TEMPLATES['two-bedroom'].template)
+  return cloneGraph(TEMPLATES['two-bedroom'].template as unknown as MutableGraph)
 }
 
 function buildDemoAfter(): { after: MutableGraph; changes: RenovationChange[] } {
-  const after = buildDemoBefore()
-  const changes: RenovationChange[] = []
-
-  removeNode(after, 'wall_part_1')
-  changes.push({
-    id: 'chg-1',
-    kind: 'remove-wall',
-    title: 'Remove partition: Bedroom 1 ↔ Bath',
-    description:
-      'Load-bearing check passed. Removing the 4 m partition between Bedroom 1 and the Bath to create a single larger space.',
+  const before = buildDemoBefore()
+  const { after, changes } = applyPlanToScene(before, {
+    summary: '',
+    changes: [
+      {
+        kind: 'remove-wall',
+        title: 'Remove partition: Bedroom 1 ↔ Bath',
+        description:
+          'Load-bearing check passed. Removing the 4 m partition between Bedroom 1 and the Bath to create a single larger space.',
+        target: {
+          wallId: 'wall_part_1',
+          zoneNames: ['Bedroom 1', 'Bath'],
+          newZoneName: 'Master Suite',
+          merge: true,
+        },
+      },
+      {
+        kind: 'relabel-zone',
+        title: 'Merge zones → "Master Suite"',
+        description:
+          'Combined Bedroom 1 and Bath footprints into a single 28 m² Master Suite zone. En-suite layout to be detailed in a follow-up.',
+        target: {
+          zoneNames: ['Master Suite'],
+          newZoneName: 'Master Suite',
+        },
+      },
+      {
+        kind: 'move-item',
+        title: 'Remove bath door',
+        description:
+          'The bath partition is gone, so the interior bath door is removed. The Master Suite becomes one open space.',
+        target: { itemId: 'door_bath' },
+      },
+      {
+        kind: 'restyle',
+        title: 'Apply warm-neutral material palette',
+        description:
+          'Walls → warm white (RAL 9001), flooring → natural oak planks, accents → brushed brass. Matches the reference image.',
+      },
+    ],
   })
 
-  const bed1 = getNode(after, 'zone_bed1')
-  if (bed1) {
-    ;(bed1 as { name: string }).name = 'Master Suite'
-    ;(bed1 as { polygon: number[][] }).polygon = [
-      [-5, -4],
-      [2, -4],
-      [2, 0],
-      [-5, 0],
-    ]
-    ;(bed1 as { color: string }).color = '#8b5cf6'
-    removeNode(after, 'zone_bath')
-    changes.push({
-      id: 'chg-2',
-      kind: 'relabel-zone',
-      title: 'Merge zones → "Master Suite"',
-      description:
-        'Combined Bedroom 1 and Bath footprints into a single 28 m² Master Suite zone. En-suite layout to be detailed in a follow-up.',
-    })
-  }
+  const suite = getNode(after, 'zone_bed1')
+  if (suite) (suite as { color: string }).color = '#8b5cf6'
 
-  const doorBath = getNode(after, 'door_bath')
-  if (doorBath) {
-    removeNode(after, 'door_bath')
-    changes.push({
-      id: 'chg-3',
-      kind: 'move-item',
-      title: 'Remove bath door',
-      description:
-        'The bath partition is gone, so the interior bath door is removed. The Master Suite becomes one open space.',
-    })
-  }
-
-  changes.push({
-    id: 'chg-4',
-    kind: 'restyle',
-    title: 'Apply warm-neutral material palette',
-    description:
-      'Walls → warm white (RAL 9001), flooring → natural oak planks, accents → brushed brass. Matches the reference image.',
-  })
-
-  return { after, changes }
+  return { after, changes: changes as RenovationChange[] }
 }
 
 function buildDemoSummary(changes: RenovationChange[]): string {
@@ -160,7 +136,11 @@ interface SpacePhotoAnalysis {
   roomLabel?: string
   approximateDimensions?: { widthMeters?: number; depthMeters?: number; heightMeters?: number }
   identifiedFixtures?: Array<{ kind: string; approximatePosition?: [number, number] }>
-  identifiedWindows?: Array<{ wallHint?: string; approximateWidth?: number; approximateHeight?: number }>
+  identifiedWindows?: Array<{
+    wallHint?: string
+    approximateWidth?: number
+    approximateHeight?: number
+  }>
   styleNotes?: string
 }
 
@@ -170,7 +150,7 @@ interface RenovationContext {
 }
 
 function buildSceneFromAnalysis(analysis: FloorplanAnalysis): MutableGraph {
-  const graph = cloneGraph(TEMPLATES['two-bedroom'].template)
+  const graph = cloneGraph(TEMPLATES['two-bedroom'].template as unknown as MutableGraph)
   for (const id of Object.keys(graph.nodes)) {
     if (
       graph.nodes[id]?.type === 'wall' ||
@@ -178,7 +158,7 @@ function buildSceneFromAnalysis(analysis: FloorplanAnalysis): MutableGraph {
       graph.nodes[id]?.type === 'door' ||
       graph.nodes[id]?.type === 'window'
     ) {
-      removeNode(graph, id)
+      removeNodeCascade(graph, id)
     }
   }
   const level = Object.values(graph.nodes).find((n) => n?.type === 'level')
@@ -253,20 +233,37 @@ Return ONLY valid JSON:
 
 Use meters. If unsure, give conservative estimates and say so in styleNotes. XZ ground plane for positions.`
 
-const RENOVATION_PROMPT = `You are a renovation planner. Given the user's goals, any floorplan analysis, and notes from their space/reference photos, propose minimal structural and layout changes.
+const RENOVATION_PROMPT = `You are a renovation planner. Given the user's goals, any floorplan analysis, and notes from their space/reference photos, propose minimal structural and layout changes that can be applied to a 3D scene graph.
 
 Respond with ONLY a JSON object:
 {
   "changes": [
     {
-      "kind": "remove-wall" | "add-wall" | "relabel-zone" | "add-opening" | "restyle",
+      "kind": "remove-wall" | "add-wall" | "relabel-zone" | "add-opening" | "restyle" | "move-item",
       "title": "short label",
-      "description": "one-sentence rationale tied to the goals"
+      "description": "one-sentence rationale tied to the goals",
+      "target": {
+        "wallId": "optional exact wall id if known from the scene",
+        "itemId": "optional door/window/item id to remove for move-item",
+        "zoneNames": ["exact room labels from the floorplan analysis when relevant"],
+        "newZoneName": "name after merge or relabel",
+        "merge": true,
+        "openingType": "door" | "window",
+        "start": [x, z],
+        "end": [x, z]
+      }
     }
   ],
   "summary": "2-3 sentence overview of the renovation intent"
 }
-Do NOT invent precise dimensions. Keep changes minimal and aligned with the stated goals and photo evidence.`
+
+Rules:
+- Prefer remove-wall on interior partitions (never demolish the whole perimeter).
+- When opening two rooms into one, use remove-wall with zoneNames of both rooms, merge: true, and newZoneName.
+- Use add-opening for new doors/windows; set openingType and mention north/south/east/west in the title when possible.
+- Use add-wall only when splitting a room; include start/end in meters on the XZ plane when you can estimate them.
+- Keep changes minimal and aligned with the stated goals and photo evidence.
+- Always include a target object (it may be empty {}).`
 
 async function analyzeFloorplanLive(
   provider: RenovateProvider,
@@ -280,11 +277,6 @@ async function analyzeFloorplanLive(
   const parsed = extractJson(text) as FloorplanAnalysis
   if (!parsed.walls) throw new Error('floorplan analysis returned no walls')
   return parsed
-}
-
-interface LiveRenovationPlan {
-  changes: Array<Omit<RenovationChange, 'id'>>
-  summary: string
 }
 
 async function analyzeSpacePhotoLive(
@@ -306,6 +298,8 @@ async function proposeRenovationLive(
     reference: string[]
     spacePhotos: string[]
     goals: string
+    sceneWallIds: string[]
+    sceneZoneNames: string[]
   },
 ): Promise<LiveRenovationPlan> {
   const prompt = [
@@ -313,6 +307,12 @@ async function proposeRenovationLive(
     '',
     '## Goals',
     args.goals,
+    '',
+    '## Scene wall ids',
+    args.sceneWallIds.join(', ') || '(none)',
+    '',
+    '## Scene zone names',
+    args.sceneZoneNames.join(', ') || '(none)',
     '',
     '## Floorplan analysis',
     '```json',
@@ -356,7 +356,9 @@ function normalizeInput(input: RenovationInput): {
     const spacePhotos = input.images
       .filter((img) => img.kind === 'interior' || img.kind === 'exterior' || img.kind === 'other')
       .map((img) => img.dataUrl)
-    const reference = input.images.filter((img) => img.kind === 'reference').map((img) => img.dataUrl)
+    const reference = input.images
+      .filter((img) => img.kind === 'reference')
+      .map((img) => img.dataUrl)
     return {
       floorplan: floorplan ?? input.floorplan,
       spacePhotos: spacePhotos.length > 0 ? spacePhotos : input.photos,
@@ -371,6 +373,16 @@ function normalizeInput(input: RenovationInput): {
     reference: input.reference,
     goals: input.goals,
   }
+}
+
+function sceneCatalog(graph: MutableGraph): { wallIds: string[]; zoneNames: string[] } {
+  const wallIds: string[] = []
+  const zoneNames: string[] = []
+  for (const node of Object.values(graph.nodes)) {
+    if (node?.type === 'wall') wallIds.push(node.id as string)
+    if (node?.type === 'zone') zoneNames.push((node as { name: string }).name)
+  }
+  return { wallIds, zoneNames }
 }
 
 export async function runRenovation(input: RenovationInput): Promise<RenovationResult> {
@@ -413,11 +425,14 @@ export async function runRenovation(input: RenovationInput): Promise<RenovationR
     before = buildDemoBefore()
   }
 
+  const catalog = sceneCatalog(before)
   const plan = await proposeRenovationLive(provider, {
     context: { floorplan: floorplanAnalysis, spacePhotos: spacePhotoAnalysis },
     reference: normalized.reference,
     spacePhotos: normalized.spacePhotos,
     goals: normalized.goals || 'Open up the space, more natural light, modern minimal aesthetic.',
+    sceneWallIds: catalog.wallIds,
+    sceneZoneNames: catalog.zoneNames,
   })
 
   const { after, changes } = applyPlanToScene(before, plan)
@@ -441,7 +456,7 @@ export async function runRenovation(input: RenovationInput): Promise<RenovationR
   return {
     before: toSceneGraph(before),
     after: toSceneGraph(after),
-    changes,
+    changes: changes as RenovationChange[],
     summary: plan.summary,
     mode: 'live',
     provider,
@@ -450,26 +465,4 @@ export async function runRenovation(input: RenovationInput): Promise<RenovationR
         ? `Analyzed with ${providerLabel(provider)}: ${parts.join(', ')}.`
         : `Analyzed with ${providerLabel(provider)} to propose a renovation plan.`,
   }
-}
-
-function applyPlanToScene(
-  before: MutableGraph,
-  plan: LiveRenovationPlan,
-): { after: MutableGraph; changes: RenovationChange[] } {
-  const after = cloneGraph(before)
-  const changes: RenovationChange[] = plan.changes.map((c, i) => ({
-    id: `chg-${i + 1}`,
-    ...c,
-  }))
-
-  let zoneIdx = 0
-  for (const c of changes) {
-    if (c.kind === 'relabel-zone') {
-      const zones = Object.values(after.nodes).filter((n) => n?.type === 'zone')
-      const target = zones[zoneIdx % Math.max(1, zones.length)]
-      if (target) (target as { name: string }).name = c.title
-      zoneIdx++
-    }
-  }
-  return { after, changes }
 }
