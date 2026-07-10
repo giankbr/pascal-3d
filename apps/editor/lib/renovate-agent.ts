@@ -1,6 +1,7 @@
 import type { SceneGraph } from '@pascal-app/core/clone-scene-graph'
 import type { AnyNode } from '@pascal-app/core/schema'
 import { TEMPLATES } from '@pascal-app/mcp/templates'
+import type { PhotoKind } from './photo-kind'
 import {
   completeVision,
   providerLabel,
@@ -17,9 +18,7 @@ import {
   removeNodeCascade,
 } from './renovate-scene'
 
-export type { PlanChangeTarget }
-
-export type PhotoKind = 'floorplan' | 'interior' | 'exterior' | 'reference' | 'other'
+export type { PlanChangeTarget, PhotoKind }
 
 export interface RenovationImage {
   dataUrl: string

@@ -8,7 +8,12 @@ import { Alert, AlertDescription } from '@/components/selia/alert'
 import { Button } from '@/components/selia/button'
 import { Card, CardBody } from '@/components/selia/card'
 import { Textarea } from '@/components/selia/textarea'
-import type { PhotoKind, RenovationResult } from '@/lib/renovate-agent'
+import type { RenovationResult } from '@/lib/renovate-agent'
+import {
+  guessPhotoKindFromName,
+  PHOTO_KIND_OPTIONS,
+  type PhotoKind,
+} from '@/lib/photo-kind'
 import { ResultViewer } from './result-viewer'
 import { ThemeToggle } from './theme'
 
@@ -17,6 +22,8 @@ interface StagedPhoto {
   name: string
   dataUrl: string
   kind: PhotoKind
+  kindSource: 'pending' | 'vision' | 'filename' | 'default' | 'manual'
+  classifying: boolean
 }
 
 type Status = 'idle' | 'reading' | 'analyzing' | 'planning' | 'done' | 'error'
@@ -29,13 +36,35 @@ const STYLE_PRESETS = [
   'Maximize storage',
 ]
 
-const PHOTO_KINDS: Array<{ kind: PhotoKind; label: string }> = [
-  { kind: 'floorplan', label: 'Floor plan' },
-  { kind: 'interior', label: 'Interior' },
-  { kind: 'exterior', label: 'Exterior' },
-  { kind: 'reference', label: 'Reference' },
-  { kind: 'other', label: 'Other' },
-]
+async function classifyStagedPhoto(
+  photo: Pick<StagedPhoto, 'id' | 'name' | 'dataUrl'>,
+): Promise<{ id: string; kind: PhotoKind; source: 'vision' | 'filename' | 'default' }> {
+  try {
+    const response = await fetch('/api/renovate/classify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dataUrl: photo.dataUrl, fileName: photo.name }),
+    })
+    if (!response.ok) throw new Error('classify failed')
+    const data = (await response.json()) as {
+      kind?: PhotoKind
+      source?: 'vision' | 'filename' | 'default'
+    }
+    if (!data.kind) throw new Error('missing kind')
+    return {
+      id: photo.id,
+      kind: data.kind,
+      source: data.source ?? 'default',
+    }
+  } catch {
+    const fromName = guessPhotoKindFromName(photo.name)
+    return {
+      id: photo.id,
+      kind: fromName ?? 'interior',
+      source: fromName ? 'filename' : 'default',
+    }
+  }
+}
 
 export default function RenovatePage() {
   const [photos, setPhotos] = useState<StagedPhoto[]>([])
@@ -46,16 +75,20 @@ export default function RenovatePage() {
   const [dropHover, setDropHover] = useState(false)
 
   const fileInput = useRef<HTMLInputElement>(null)
+  const lockedKinds = useRef(new Set<string>())
 
   const readFile = useCallback((file: File): Promise<StagedPhoto> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader()
       reader.onload = () => {
+        const fromName = guessPhotoKindFromName(file.name)
         resolve({
           id: `${file.name}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           name: file.name,
           dataUrl: String(reader.result ?? ''),
-          kind: 'interior',
+          kind: fromName ?? 'interior',
+          kindSource: fromName ? 'filename' : 'pending',
+          classifying: true,
         })
       }
       reader.onerror = () => reject(new Error('read failed'))
@@ -63,21 +96,48 @@ export default function RenovatePage() {
     })
   }, [])
 
+  const applyClassification = useCallback(
+    (id: string, kind: PhotoKind, source: StagedPhoto['kindSource']) => {
+      if (lockedKinds.current.has(id)) return
+      setPhotos((prev) =>
+        prev.map((photo) =>
+          photo.id === id
+            ? { ...photo, kind, kindSource: source, classifying: false }
+            : photo,
+        ),
+      )
+    },
+    [],
+  )
+
   const handleFiles = useCallback(
     async (files: FileList | null) => {
       if (!files || files.length === 0) return
       const images = await Promise.all(Array.from(files).map(readFile))
       setPhotos((prev) => [...prev, ...images])
+
+      void Promise.all(
+        images.map(async (photo) => {
+          const result = await classifyStagedPhoto(photo)
+          applyClassification(result.id, result.kind, result.source)
+        }),
+      )
     },
-    [readFile],
+    [readFile, applyClassification],
   )
 
   const removePhoto = useCallback((id: string) => {
+    lockedKinds.current.delete(id)
     setPhotos((prev) => prev.filter((p) => p.id !== id))
   }, [])
 
   const setPhotoKind = useCallback((id: string, kind: PhotoKind) => {
-    setPhotos((prev) => prev.map((p) => (p.id === id ? { ...p, kind } : p)))
+    lockedKinds.current.add(id)
+    setPhotos((prev) =>
+      prev.map((p) =>
+        p.id === id ? { ...p, kind, kindSource: 'manual', classifying: false } : p,
+      ),
+    )
   }, [])
 
   const onDrop = useCallback(
@@ -90,6 +150,7 @@ export default function RenovatePage() {
   )
 
   const canSubmit = photos.length > 0 || goals.trim().length > 0
+  const classifying = photos.some((p) => p.classifying)
 
   const reset = useCallback(() => {
     setResult(null)
@@ -169,7 +230,11 @@ export default function RenovatePage() {
               <div className="flex items-baseline justify-between gap-3">
                 <label className="font-medium text-foreground">Photos</label>
                 <span className="text-dimmed text-sm">
-                  {photos.length === 0 ? 'Optional but recommended' : `${photos.length} uploaded`}
+                  {photos.length === 0
+                    ? 'Optional but recommended'
+                    : classifying
+                      ? 'Detecting photo types…'
+                      : `${photos.length} uploaded`}
                 </span>
               </div>
 
@@ -188,7 +253,9 @@ export default function RenovatePage() {
               >
                 <Icon className="mb-3 size-6 text-dimmed" icon="tabler:photo-up" />
                 <p className="font-medium text-foreground">Drop photos here</p>
-                <p className="mt-1 text-muted text-sm">Floor plan, interior, exterior, or reference</p>
+                <p className="mt-1 text-muted text-sm">
+                  Types are detected automatically. You can still change them.
+                </p>
                 <Button
                   className="mt-4"
                   onClick={() => fileInput.current?.click()}
@@ -305,6 +372,13 @@ function PhotoThumb({
   onKindChange: (kind: PhotoKind) => void
   onRemove: () => void
 }) {
+  const autoLabel =
+    photo.kindSource === 'vision' || photo.kindSource === 'filename'
+      ? 'Auto'
+      : photo.classifying
+        ? 'Detecting'
+        : null
+
   return (
     <div className="group relative overflow-hidden rounded-xl bg-accent shadow-[inset_0_0_0_1px_var(--border)]">
       <div className="relative aspect-square">
@@ -323,18 +397,24 @@ function PhotoThumb({
         >
           <Icon className="size-3.5" icon="tabler:x" />
         </button>
+        {autoLabel && (
+          <span className="absolute bottom-2 left-2 rounded-md bg-card/90 px-1.5 py-0.5 font-medium text-[10px] text-muted shadow-sm">
+            {autoLabel}
+          </span>
+        )}
       </div>
       <div className="p-2">
         <label className="sr-only" htmlFor={`kind-${photo.id}`}>
           Photo type
         </label>
         <select
-          className="w-full cursor-pointer appearance-none rounded-lg border-0 bg-card px-2.5 py-1.5 font-medium text-foreground text-sm outline-none ring ring-border transition-[box-shadow] duration-150 ease-out focus:ring-2 focus:ring-primary"
+          className="w-full cursor-pointer appearance-none rounded-lg border-0 bg-card px-2.5 py-1.5 font-medium text-foreground text-sm outline-none ring ring-border transition-[box-shadow] duration-150 ease-out focus:ring-2 focus:ring-primary disabled:opacity-70"
+          disabled={photo.classifying && photo.kindSource === 'pending'}
           id={`kind-${photo.id}`}
           onChange={(e) => onKindChange(e.target.value as PhotoKind)}
           value={photo.kind}
         >
-          {PHOTO_KINDS.map((option) => (
+          {PHOTO_KIND_OPTIONS.map((option) => (
             <option key={option.kind} value={option.kind}>
               {option.label}
             </option>

@@ -1,6 +1,6 @@
 import { type NextRequest, NextResponse } from 'next/server'
+import { PHOTO_KIND_VALUES, type PhotoKind } from '@/lib/photo-kind'
 import {
-  type PhotoKind,
   runRenovation,
   type RenovationImage,
   type RenovationInput,
@@ -9,8 +9,6 @@ import {
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120
 
-const PHOTO_KINDS: PhotoKind[] = ['floorplan', 'interior', 'exterior', 'reference', 'other']
-
 function parseImages(raw: unknown): RenovationImage[] | undefined {
   if (!Array.isArray(raw)) return undefined
   const images: RenovationImage[] = []
@@ -18,7 +16,7 @@ function parseImages(raw: unknown): RenovationImage[] | undefined {
     if (!item || typeof item !== 'object') continue
     const record = item as { dataUrl?: unknown; kind?: unknown }
     if (typeof record.dataUrl !== 'string') continue
-    const kind = PHOTO_KINDS.includes(record.kind as PhotoKind)
+    const kind = PHOTO_KIND_VALUES.includes(record.kind as PhotoKind)
       ? (record.kind as PhotoKind)
       : 'interior'
     images.push({ dataUrl: record.dataUrl, kind })
